@@ -28,7 +28,7 @@ const createStableFetchFunction = () => {
     north: number;
   }): Promise<Property[]> => {
     console.log("🔥 Fetching properties with bounds:", bounds);
-    
+
     try {
       // Cancel any previous request
       if (fetchAbortController) {
@@ -55,11 +55,14 @@ const createStableFetchFunction = () => {
       });
 
       if (!response.ok) {
-        console.warn(`API endpoint not found (${response.status}), using mock data`);
+        console.warn(
+          `API endpoint not found (${response.status}), using mock data`
+        );
         return mockProperties;
       }
 
       const data = await response.json();
+      console.log("📡 Fetched data from API:", data);
 
       // Transform GeoJSON FeatureCollection to Property array if needed
       if (data.type === "FeatureCollection" && data.features) {
@@ -75,7 +78,8 @@ const createStableFetchFunction = () => {
                 props.currency === "USD" ? "" : " " + props.currency
               }`,
               price: props.price || 0,
-              type: "rent" as const,
+              currency: props.currency,
+              type: (props.type || "rent").toLowerCase() as "rent" | "buy",
               bedrooms: 2,
               bathrooms: 1,
               area: 1000,
@@ -91,7 +95,9 @@ const createStableFetchFunction = () => {
             };
           });
 
-        console.log(`✅ Transformed ${transformedProperties.length} properties from API`);
+        console.log(
+          `✅ Transformed ${transformedProperties.length} properties from API`
+        );
         return transformedProperties;
       }
 
@@ -144,9 +150,13 @@ export default function Search() {
   >();
   const [isMapReady, setIsMapReady] = createSignal(false);
   const [hasInitialFetch, setHasInitialFetch] = createSignal(false);
-  
+  const [lastFetchedBounds, setLastFetchedBounds] = createSignal<
+    { west: number; south: number; east: number; north: number } | undefined
+  >();
+  const [allowBoundsFetch, setAllowBoundsFetch] = createSignal(false);
+
   // Property state management (separate from map bounds)
-  const [properties, setProperties] = createSignal<Property[]>(mockProperties);
+  const [properties, setProperties] = createSignal<Property[]>([]);
   const [isLoading, setIsLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -154,22 +164,25 @@ export default function Search() {
   let boundsChangeTimeout: number | undefined;
 
   // Non-reactive fetch function to prevent loops
-  const fetchData = async (bounds?: { west: number; south: number; east: number; north: number }) => {
-    console.log("🚀 Fetching properties...");
-    
+  const fetchData = async (bounds?: {
+    west: number;
+    south: number;
+    east: number;
+    north: number;
+  }) => {
     // Prevent concurrent fetches
     if (isLoading()) {
-      console.log("⚠️ Already loading, skipping fetch");
+      console.log("🚫 Fetch skipped - already loading");
       return;
     }
-    
+
+    console.log("🚀 Starting fetch with bounds:", bounds ? "defined" : "undefined");
     setIsLoading(true);
     setError(null);
-    
+
     try {
       const newProperties = await stableFetchProperties(bounds);
-      console.log("✅ Fetch successful, got", newProperties.length, "properties");
-      
+
       batch(() => {
         setProperties(newProperties);
         setIsLoading(false);
@@ -177,7 +190,9 @@ export default function Search() {
     } catch (err) {
       console.error("❌ Fetch failed:", err);
       batch(() => {
-        setError(err instanceof Error ? err.message : "Failed to fetch properties");
+        setError(
+          err instanceof Error ? err.message : "Failed to fetch properties"
+        );
         setIsLoading(false);
       });
     }
@@ -232,19 +247,21 @@ export default function Search() {
     // Prevent updates if bounds haven't significantly changed
     const currentBounds = untrack(mapBounds);
     if (!areBoundsDifferent(currentBounds, bounds)) {
-      console.log("Bounds change ignored - not significant");
+      console.log("📍 Bounds change ignored - not significant");
       return;
     }
 
-    console.log("Significant bounds change detected");
+    console.log("📍 Bounds change detected, allowBoundsFetch:", allowBoundsFetch());
     batch(() => {
       setMapBounds(bounds);
 
-      // Only fetch if map is ready and bounds are different from last fetch
+      // Only fetch if map is ready, bounds fetching is allowed, and bounds are different from last fetch
       if (
         isMapReady() &&
+        allowBoundsFetch() &&
         areBoundsDifferent(untrack(lastFetchedBounds), bounds)
       ) {
+        console.log("📍 Bounds change will trigger fetch");
         // Clear existing timeout
         if (boundsChangeTimeout) {
           clearTimeout(boundsChangeTimeout);
@@ -252,8 +269,8 @@ export default function Search() {
 
         // Debounce the fetch
         boundsChangeTimeout = setTimeout(() => {
-          console.log("Fetching with new bounds after debounce");
           setLastFetchedBounds(bounds);
+          fetchData(bounds);
         }, 1000); // Reduced to 1 second for better UX
       }
     });
@@ -261,21 +278,22 @@ export default function Search() {
 
   // Handler for when map is ready - triggers initial fetch (once only)
   const handleMapReady = () => {
-    console.log("🗺️ Map ready called. Already fetched?", hasInitialFetch());
-    
     // Prevent multiple initial fetches
     if (hasInitialFetch()) {
-      console.log("⚠️ Initial fetch already done, skipping");
       return;
     }
-    
-    console.log("🚀 Map is ready, triggering initial fetch");
+
     setIsMapReady(true);
     setHasInitialFetch(true);
 
     // Get current bounds non-reactively and fetch data
     const currentBounds = untrack(mapBounds);
     fetchData(currentBounds);
+
+    // Allow bounds-based fetching after a delay to prevent immediate double-fetch
+    setTimeout(() => {
+      setAllowBoundsFetch(true);
+    }, 3000); // 3 seconds to allow initial load to settle
   };
 
   const [mobileView, setMobileView] = createSignal<"list" | "map">("list");
@@ -308,7 +326,7 @@ export default function Search() {
               onFiltersChange={handleFiltersChange}
               propertyCount={filteredProperties().length}
             />
-            
+
             {/* Manual Refresh Button */}
             <button
               onClick={() => fetchData(untrack(mapBounds))}
@@ -317,16 +335,43 @@ export default function Search() {
             >
               {isLoading() ? (
                 <>
-                  <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  <svg
+                    class="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-500"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      stroke-width="4"
+                    ></circle>
+                    <path
+                      class="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
                   </svg>
                   Loading...
                 </>
               ) : (
                 <>
-                  <svg class="-ml-1 mr-2 h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  <svg
+                    class="-ml-1 mr-2 h-4 w-4 text-gray-500"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
                   </svg>
                   Refresh
                 </>
@@ -382,12 +427,58 @@ export default function Search() {
               {isLoading() && (
                 <div class="flex flex-col items-center justify-center py-8">
                   <LoadingSpinner size="md" />
+                  <p class="mt-3 text-sm text-gray-600">
+                    Loading properties...
+                  </p>
+                </div>
+              )}
+
+              {error() && (
+                <ErrorMessage
+                  title="Failed to load properties"
+                  message={error()!}
+                  onRetry={() => fetchData(untrack(mapBounds))}
+                />
+              )}
+
+              {!isLoading() && !error() && (
+                <PropertyGrid
+                  properties={filteredProperties()}
+                  selectedProperty={selectedProperty()}
+                  onPropertySelect={handlePropertySelect}
+                  onClearFilters={handleClearFilters}
+                />
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Desktop: Side-by-side layout */}
+        <div class="hidden lg:flex w-full">
+          {/* Map - Takes remaining space */}
+          <div class="flex-1">
+            <MapView
+              properties={filteredProperties()}
+              selectedProperty={selectedProperty()}
+              onPropertyClick={handleMapPropertyClick}
+              onBoundsChange={handleMapBoundsChange}
+              onMapReady={handleMapReady}
+              className="h-full"
+            />
+          </div>
+
+          {/* Property List - Fixed width */}
+          <div class="w-[600px] xl:w-[700px] flex-shrink-0 bg-white border-l border-gray-200 overflow-y-auto">
+            <div class="p-6">
+              {isLoading() && (
+                <div class="flex flex-col items-center justify-center py-8">
+                  <LoadingSpinner size="md" />
                   <p class="mt-3 text-sm text-gray-600">Loading properties...</p>
                 </div>
               )}
               
               {error() && (
-                <ErrorMessage 
+                <ErrorMessage
                   title="Failed to load properties"
                   message={error()!}
                   onRetry={() => fetchData(untrack(mapBounds))}
@@ -403,65 +494,7 @@ export default function Search() {
                 />
               )}
             </div>
-          )}
-        </div>
-
-        {/* Desktop: Side-by-side layout */}
-        <div class="hidden lg:flex w-full">
-          {/* Loading State for Desktop */}
-          {isLoading() && (
-            <>
-              <div class="flex-1 bg-gray-200 flex items-center justify-center">
-                <LoadingSpinner size="md" />
-              </div>
-              <div class="w-[600px] xl:w-[700px] flex-shrink-0 bg-white border-l border-gray-200 p-6">
-                <div class="mb-4 flex items-center gap-2">
-                  <LoadingSpinner size="sm" />
-                  <span class="text-lg font-semibold text-gray-900">Loading properties...</span>
-                </div>
-                <PropertySkeleton count={4} />
-              </div>
-            </>
-          )}
-          
-          {/* Error State for Desktop */}
-          {error() && (
-            <div class="w-full flex items-center justify-center p-6">
-              <ErrorMessage 
-                title="Failed to load properties"
-                message={error()!}
-                onRetry={() => fetchData(untrack(mapBounds))}
-              />
-            </div>
-          )}
-          
-          {/* Content for Desktop */}
-          {!isLoading() && !error() && (
-            <>
-              {/* Map - Takes remaining space */}
-              <div class="flex-1">
-                <MapView
-                  properties={filteredProperties()}
-                  selectedProperty={selectedProperty()}
-                  onPropertyClick={handleMapPropertyClick}
-                  // onMapReady={handleMapReady} // Temporarily disabled to test
-                  className="h-full"
-                />
-              </div>
-
-              {/* Property List - Fixed width */}
-              <div class="w-[600px] xl:w-[700px] flex-shrink-0 bg-white border-l border-gray-200 overflow-y-auto">
-                <div class="p-6">
-                  <PropertyGrid
-                    properties={filteredProperties()}
-                    selectedProperty={selectedProperty()}
-                    onPropertySelect={handlePropertySelect}
-                    onClearFilters={handleClearFilters}
-                  />
-                </div>
-              </div>
-            </>
-          )}
+          </div>
         </div>
       </div>
 

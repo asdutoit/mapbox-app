@@ -2,6 +2,7 @@ export interface Property {
   id: number;
   title: string;
   price: number;
+  currency?: string;
   type: 'rent' | 'buy';
   bedrooms: number;
   bathrooms: number;

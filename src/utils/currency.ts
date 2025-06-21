@@ -1,4 +1,4 @@
-import { numFormatter } from "@/src/utils/numFormatter";
+import { numFormatter } from "./numFormatter";
 
 function Currency(inputCurrency?: string, inputPrice: number = 0) {
   const currency = inputCurrency

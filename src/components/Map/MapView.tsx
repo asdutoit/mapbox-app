@@ -29,7 +29,7 @@ export default function MapView(props: MapViewProps) {
   let mapContainer: HTMLDivElement;
   const [map, setMap] = createSignal<mapboxgl.Map | null>(null);
   const [markers, setMarkers] = createSignal<mapboxgl.Marker[]>([]);
-  const [currentZoom, setCurrentZoom] = createSignal(10);
+  const [currentZoom, setCurrentZoom] = createSignal(9);
   const [popupProperty, setPopupProperty] = createSignal<
     Property | undefined
   >();
@@ -55,12 +55,10 @@ export default function MapView(props: MapViewProps) {
   // Helper to emit bounds change safely
   const emitBoundsChange = (mapInstance: mapboxgl.Map) => {
     if (!isInitialized() || isMapMoving()) {
-      console.log("🚫 Skipping bounds change - map not ready or moving");
       return;
     }
 
     const bounds = mapInstance.getBounds();
-    console.log("📍 Emitting bounds change");
     props.onBoundsChange?.({
       west: bounds.getWest(),
       south: bounds.getSouth(),
@@ -86,7 +84,7 @@ export default function MapView(props: MapViewProps) {
       container: mapContainer,
       style: "mapbox://styles/mapbox/streets-v12",
       center: props.center || [-74.006, 40.7128], // Default to NYC (Manhattan)
-      zoom: props.zoom || 11,
+      zoom: props.zoom || 9,
       cooperativeGestures: false, // Allow mouse wheel zoom without modifier keys
     });
 
@@ -109,7 +107,6 @@ export default function MapView(props: MapViewProps) {
     });
 
     mapInstance.on("load", () => {
-      console.log("🗺️ Map loaded");
       setMap(mapInstance);
 
       // Wait a bit for map to settle, then mark as initialized
@@ -118,7 +115,6 @@ export default function MapView(props: MapViewProps) {
 
         // Call onMapReady if provided
         if (props.onMapReady) {
-          console.log("🚀 Calling onMapReady");
           props.onMapReady();
         }
 
@@ -154,8 +150,6 @@ export default function MapView(props: MapViewProps) {
       [map, () => props.properties, currentZoom],
       ([mapInstance, currentProperties, zoom]) => {
         if (!mapInstance || !currentProperties) return;
-
-        // Updating markers for clustering
 
         // Clear existing markers
         markers().forEach((marker) => marker.remove());
@@ -195,8 +189,9 @@ export default function MapView(props: MapViewProps) {
             e.stopPropagation(); // Prevent map click event
 
             if (cluster.isCluster) {
-              // Close popup and zoom in on cluster
+              // Close popup, deselect property, and zoom in on cluster
               setPopupProperty(undefined);
+              props.onPropertyClick?.(undefined); // Deselect the property
               mapInstance.flyTo({
                 center: cluster.center,
                 zoom: Math.min(zoom + 2, 18),

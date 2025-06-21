@@ -1,6 +1,7 @@
 import mapboxgl from 'mapbox-gl';
 import Supercluster from 'supercluster';
 import type { Property } from '../types/Property';
+import Currency from './currency';
 
 export function formatPrice(price: number, type: 'rent' | 'buy'): string {
   if (type === 'rent') {
@@ -20,9 +21,11 @@ export function formatPropertyType(type: string): string {
 export function createPropertyMarker(property: Property): mapboxgl.Marker {
   const el = document.createElement('div');
   el.className = 'price-marker';
+  
+  const { price, currency } = Currency(property.currency, property.price);
   el.textContent = property.type === 'rent' 
-    ? `$${property.price.toLocaleString()}/mo`
-    : `$${property.price.toLocaleString()}`;
+    ? `${currency}${price}/mo`
+    : `${currency}${price}`;
   
   return new mapboxgl.Marker({ 
     element: el,
@@ -74,8 +77,22 @@ export function clusterProperties(properties: Property[], zoom: number): Array<{
   
   const cluster = initializeCluster();
   
-  // Convert properties to GeoJSON points for SuperCluster
-  const points: Supercluster.PointFeature<Property>[] = properties.map((property) => ({
+  // Convert properties to GeoJSON points for SuperCluster - check for invalid coordinates
+  const validProperties = properties.filter((property) => {
+    const [lng, lat] = property.coordinates;
+    const isValid = typeof lng === 'number' && typeof lat === 'number' && 
+                   !isNaN(lng) && !isNaN(lat) && 
+                   lng >= -180 && lng <= 180 && 
+                   lat >= -90 && lat <= 90;
+    
+    if (!isValid) {
+      console.warn(`⚠️ Invalid coordinates for property ${property.id}:`, property.coordinates);
+    }
+    
+    return isValid;
+  });
+  
+  const points: Supercluster.PointFeature<Property>[] = validProperties.map((property) => ({
     type: 'Feature',
     properties: property,
     geometry: {
@@ -92,7 +109,7 @@ export function clusterProperties(properties: Property[], zoom: number): Array<{
   const clusters = cluster.getClusters(bounds, Math.floor(zoom));
   
   // Convert SuperCluster results back to our format
-  return clusters.map((clusterFeature) => {
+  const result = clusters.map((clusterFeature) => {
     if (clusterFeature.properties?.cluster) {
       // This is a cluster
       const clusterId = clusterFeature.properties.cluster_id;
@@ -117,6 +134,14 @@ export function clusterProperties(properties: Property[], zoom: number): Array<{
       };
     }
   });
+  
+  // Validate property count matches
+  const totalPropertiesInResult = result.reduce((sum, item) => sum + item.properties.length, 0);
+  if (totalPropertiesInResult !== validProperties.length) {
+    console.warn(`⚠️ Property count mismatch! Valid properties: ${validProperties.length}, Clustered output: ${totalPropertiesInResult}`);
+  }
+  
+  return result;
 }
 
 export function createClusterMarker(cluster: {
@@ -140,9 +165,11 @@ export function createClusterMarker(cluster: {
     // Single property marker - keep bottom anchor 
     const property = cluster.properties[0];
     el.className = 'price-marker';
+    
+    const { price, currency } = Currency(property.currency, property.price);
     el.textContent = property.type === 'rent' 
-      ? `$${property.price.toLocaleString()}/mo`
-      : `$${property.price.toLocaleString()}`;
+      ? `${currency}${price}/mo`
+      : `${currency}${price}`;
     
 
     return new mapboxgl.Marker({ 
